@@ -9,7 +9,7 @@ const WHITELIST_DOMAINS = [];
 const WARNING_TEXT =
   '⚠️ *É contra as regras do grupo enviar links.* A mensagem foi removida.';
 const ALLOW_ADMINS_TO_POST = true;
-const MAX_STRIKES = 2; // Remove usuário após X infrações
+const MAX_STRIKES = 2;
 
 // Arquivos de sessão e infrações
 const SESSION_FILE_PATH = './session.json';
@@ -17,11 +17,24 @@ const STRIKES_FILE_PATH = './strikes.json';
 let sessionData;
 let strikes = {};
 
-// Carrega sessão
-if (fs.existsSync(SESSION_FILE_PATH)) sessionData = require(SESSION_FILE_PATH);
+// Tenta carregar sessão existente
+try {
+    if (fs.existsSync(SESSION_FILE_PATH)) {
+        const fileContent = fs.readFileSync(SESSION_FILE_PATH, 'utf8');
+        if (fileContent) sessionData = JSON.parse(fileContent);
+    }
+} catch (err) {
+    console.log('⚠️ Falha ao ler session.json. Será gerada uma nova sessão.');
+    sessionData = null;
+}
 
 // Carrega strikes
-if (fs.existsSync(STRIKES_FILE_PATH)) strikes = require(STRIKES_FILE_PATH);
+if (fs.existsSync(STRIKES_FILE_PATH)) {
+    try {
+        const data = fs.readFileSync(STRIKES_FILE_PATH, 'utf8');
+        if (data) strikes = JSON.parse(data);
+    } catch {}
+}
 
 // Inicializa cliente
 const client = new Client({
