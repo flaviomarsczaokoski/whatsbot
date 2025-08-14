@@ -1,6 +1,7 @@
 const fs = require('fs');
 const { Client } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 
 // Configurações
 const LINK_REGEX =
@@ -43,9 +44,9 @@ const client = new Client({
 });
 
 // QR Code
-client.on('qr', async (qr) => {
-  console.log('📱 QR Code gerado! Escaneie no WhatsApp.');
-  await qrcode.toFile('qr.png', qr);
+client.on('qr', (qr) => {
+  console.log('📱 Escaneie este QR Code no WhatsApp:');
+  qrcodeTerminal.generate(qr, { small: true });
 });
 
 // Sessão autenticada
