@@ -1,134 +1,72 @@
-const fs = require('fs');
-const { Client } = require('whatsapp-web.js');
-const qrcode = require('qrcode');
-const qrcodeTerminal = require('qrcode-terminal');
+import express from 'express';
+import qrcode from 'qrcode';
+import fs from 'fs';
+import { Client, LocalAuth } from 'whatsapp-web.js';
 
-// Configurações
-const LINK_REGEX = /\b((https?:\/\/|www\.)[^\s<>()]+|[^\s<>()]+\.(com|net|org|io|gov|edu|app|br)(\/[^\s<>()]*)?)\b/i;
-const WHITELIST_DOMAINS = [];
-const WARNING_TEXT = '⚠️ *É contra as regras do grupo enviar links.* A mensagem foi removida.';
-const ALLOW_ADMINS_TO_POST = false;
-const MAX_STRIKES = 2;
+const app = express();
+let qrCodeDataUrl = '';
+const PORT = process.env.PORT || 3000;
 
-// Arquivos de sessão e infrações
-const SESSION_FILE_PATH = './session.json';
-const STRIKES_FILE_PATH = './strikes.json';
-let sessionData;
-let strikes = {};
+const infractionsFile = './infractions.json';
 
-// Tenta carregar sessão existente
-try {
-    if (fs.existsSync(SESSION_FILE_PATH)) {
-        const fileContent = fs.readFileSync(SESSION_FILE_PATH, 'utf8');
-        if (fileContent) sessionData = JSON.parse(fileContent);
-    }
-} catch (err) {
-    console.log('⚠️ Falha ao ler session.json. Será gerada uma nova sessão.');
-    sessionData = null;
+function loadInfractions() {
+  if (!fs.existsSync(infractionsFile)) fs.writeFileSync(infractionsFile, '{}');
+  return JSON.parse(fs.readFileSync(infractionsFile));
 }
 
-// Carrega strikes
-if (fs.existsSync(STRIKES_FILE_PATH)) {
-    try {
-        const data = fs.readFileSync(STRIKES_FILE_PATH, 'utf8');
-        if (data) strikes = JSON.parse(data);
-    } catch {}
+function saveInfractions(data) {
+  fs.writeFileSync(infractionsFile, JSON.stringify(data));
 }
 
-// Inicializa cliente
 const client = new Client({
-  session: sessionData,
-  puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] }
+  authStrategy: new LocalAuth(),
+  puppeteer: { args: ['--no-sandbox'] }
 });
 
-// QR Code
-client.on('qr', async (qr) => {
-    console.log('📱 QR Code gerado! Escaneie o arquivo qr.png com WhatsApp.');
-    qrcodeTerminal.generate(qr, { small: false }); // opcional: ver no terminal
-    await qrcode.toFile('/storage/qr.png', qr); // salva imagem no storage do Railway
-});
-
-// Sessão autenticada
-client.on('authenticated', (session) => {
-    sessionData = session;
-    fs.writeFileSync(SESSION_FILE_PATH, JSON.stringify(session));
-    console.log('💾 Sessão salva com sucesso!');
-});
-
-client.on('auth_failure', () => {
-    console.log('❌ Falha na autenticação. Apague session.json e tente novamente.');
+client.on('qr', async qr => {
+  console.log('QR recebido. Acesse /qr para visualizar.');
+  qrCodeDataUrl = await qrcode.toDataURL(qr);
 });
 
 client.on('ready', () => {
-    console.log('✅ Bot pronto e conectado!');
+  console.log('✅ Bot pronto!');
 });
 
-// Mensagens
-client.on('message_create', async (msg) => {
-    try {
-        if (!msg.from.endsWith('@g.us')) return;
-        const chat = await msg.getChat();
-        if (!chat.isGroup) return;
+client.on('message', async msg => {
+  const chat = await msg.getChat();
+  if (!chat.isGroup) return;
 
-        const contact = await msg.getContact();
-        const meId = client.info.wid._serialized;
+  const linkRegex = /(https?:\/\/[^\s]+)/g;
+  if (linkRegex.test(msg.body)) {
+    const sender = await msg.getContact();
+    const senderId = sender.id._serialized;
+    const senderName = sender.pushname || sender.number;
 
-        // Verifica se bot é admin
-        const meAsParticipant = chat.participants.find(p => p.id._serialized === meId);
-        const botIsAdmin = !!meAsParticipant?.isAdmin || !!meAsParticipant?.isSuperAdmin;
-        if (!botIsAdmin) return;
+    let infractions = loadInfractions();
+    infractions[senderId] = (infractions[senderId] || 0) + 1;
+    saveInfractions(infractions);
 
-        const text = (msg.body || '').trim();
-        if (!text || msg.fromMe) return;
+    await msg.delete(true);
+    await chat.sendMessage(`🚫 @${sender.number}, enviar links é contra as regras do grupo. Infração ${infractions[senderId]}/2.`, {
+      mentions: [sender]
+    });
 
-        // Verifica link proibido
-        if (!containsBlockedLink(text)) return;
-
-        // Se admin e permitido postar, ignora
-        const senderAsParticipant = chat.participants.find(p => p.id.user === contact.id.user);
-        const senderIsAdmin = !!senderAsParticipant?.isAdmin || !!senderAsParticipant?.isSuperAdmin;
-        if (senderIsAdmin && ALLOW_ADMINS_TO_POST) return;
-
-        // Apaga mensagem
-        try { await msg.delete(true); } catch (err) { try { await msg.delete(); } catch {} }
-
-        // Atualiza strikes
-        const userId = contact.id._serialized;
-        strikes[userId] = (strikes[userId] || 0) + 1;
-        fs.writeFileSync(STRIKES_FILE_PATH, JSON.stringify(strikes, null, 2));
-
-        // Mensagem de aviso
-        await chat.sendMessage(`${WARNING_TEXT}\n📌 Infrações: ${strikes[userId]}/${MAX_STRIKES}`, { mentions: [userId] });
-
-        // Remove usuário se exceder limite
-        if (strikes[userId] >= MAX_STRIKES) {
-            try {
-                await chat.removeParticipants([userId]);
-                console.log(`🛑 Usuário removido: ${contact.pushname || userId}`);
-                delete strikes[userId];
-                fs.writeFileSync(STRIKES_FILE_PATH, JSON.stringify(strikes, null, 2));
-            } catch (err) {
-                console.error('❌ Falha ao remover usuário:', err);
-            }
-        }
-
-    } catch (err) {
-        console.error('❌ Erro ao processar mensagem:', err);
+    if (infractions[senderId] >= 2) {
+      await chat.removeParticipants([senderId]);
+      delete infractions[senderId];
+      saveInfractions(infractions);
+      console.log(`Usuário ${senderName} removido por excesso de infrações.`);
     }
+  }
 });
 
-// Função auxiliar
-function containsBlockedLink(text) {
-    const match = text.match(LINK_REGEX);
-    if (!match) return false;
+app.get('/qr', (req, res) => {
+  if (!qrCodeDataUrl) return res.send('QR ainda não gerado, aguarde...');
+  res.send(`<img src="${qrCodeDataUrl}" />`);
+});
 
-    if (WHITELIST_DOMAINS.length > 0) {
-        const lower = text.toLowerCase();
-        const isWhitelisted = WHITELIST_DOMAINS.some(d => lower.includes(d.toLowerCase()));
-        return !isWhitelisted;
-    }
-    return true;
-}
-
-// Inicializa bot
 client.initialize();
+
+app.listen(PORT, () => {
+  console.log(`🌐 Servidor HTTP rodando na porta ${PORT}`);
+});

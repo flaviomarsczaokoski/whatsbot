@@ -1,18 +1,14 @@
 {
   "name": "whatsbot",
   "version": "1.0.0",
-  "description": "",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
+    "express": "^4.19.2",
     "qrcode": "^1.5.4",
-    "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "^1.32.0"
   }
 }
